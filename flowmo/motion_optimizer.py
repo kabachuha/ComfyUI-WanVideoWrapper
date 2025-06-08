@@ -198,7 +198,7 @@ class MotionVarianceOptimizer:
             timestep = torch.tensor([timestep], device=sample.device)
         
         def custom_forward(x, t, **kwargs):
-            return model(x, t=t, **kwargs)[0]  # Add batch dimension handling
+            return model([x], t=t, **kwargs)[0]  # Add batch dimension handling
         
         # Only apply after certain steps and at specified frequency
         if curr_step < self.start_after_steps or curr_step % self.apply_frequency != 0:

@@ -2309,7 +2309,7 @@ class WanVideoMotionOptimizer:
         return {"required": {
                 "iterations" : ("INT", {"default": 3, "min": 1,}),
                 "lr" : ("FLOAT", {"default": 0.001, "min": 1e-6,}),
-                "start_after_steps" : ("INT", {"default": -1, "min": -1,}),
+                "start_after_steps" : ("INT", {"default": -1, "min": 0,}),
                 "apply_frequency" : ("INT", {"default": 1, "min": 1,}),
                 "use_softmax_mean": ("BOOLEAN", {"default": True}),
                 "temperature": ("FLOAT", {"default": 10.0, "min": 0,}),
@@ -3245,53 +3245,6 @@ class WanVideoSampler:
             else:
                 disable_enhance()
 
-            timestemps = [973, 968, 963, 957, 952, 946]  # Steps to apply motion optimization
-            if motion_optimizer_args is not None and t in timestemps:
-                print("debug: Motion optimizer triggered!")
-                print("latent_model_input.shape", latent_model_input.shape)
-                # Initialize motion optimizer
-                from .flowmo.motion_optimizer import MotionVarianceOptimizer, ModelStateCheckpointer
-                motion_optimizer = MotionVarianceOptimizer(
-                    iterations=motion_optimizer_args.get("iterations", 3),
-                    lr=motion_optimizer_args.get("lr", 0.001),
-                    start_after_steps=motion_optimizer_args.get("start_after_steps", 15),
-                    apply_frequency=motion_optimizer_args.get("apply_frequency", 5),
-                    use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
-                    temperature=motion_optimizer_args.get("temperature", 10.0)
-                )
-                state_checkpointer = ModelStateCheckpointer(device=device)
-                
-                # Save model state
-                checkpoint_key = f"step_{idx}"
-                state_checkpointer.save_state(transformer, key=checkpoint_key)
-                
-                # Run optimization
-                optimized_sample = motion_optimizer.optimize_noise_prediction(
-                    model=transformer,
-                    sample=latent_model_input,
-                    timestep=timestep,
-                    arg_c={
-                        'context': text_embeds["prompt_embeds"],
-                        'seq_len': seq_len,
-                        'freqs': freqs
-                    },
-                    arg_null={
-                        'context': text_embeds["negative_prompt_embeds"],
-                        'seq_len': seq_len,
-                        'freqs': freqs
-                    },
-                    guide_scale=cfg[idx],
-                    curr_step=idx,
-                    total_steps=steps
-                )
-                
-                # Restore model state
-                state_checkpointer.load_state(transformer, key=checkpoint_key)
-                state_checkpointer.clear(key=checkpoint_key)
-                
-                # Use optimized sample for scheduler step
-                latent_model_input = optimized_sample#.unsqueeze(0)  # Add back batch dim
-
             #flow-edit
             if flowedit_args is not None:
                 sigma = t / 1000.0
@@ -3522,6 +3475,51 @@ class WanVideoSampler:
                     noise_pred = torch.cat([noise_pred[:, latent_video_length - shift_idx:]] + [noise_pred[:, :latent_video_length - shift_idx]], dim=1)
                     shift_idx = (shift_idx + latent_skip) % latent_video_length
             
+            timestemps = [973, 968, 963, 957, 952, 946]  # Steps to apply motion optimization
+            if motion_optimizer_args is not None and t.item() in timestemps:
+                # Initialize motion optimizer
+                from .flowmo.motion_optimizer import MotionVarianceOptimizer, ModelStateCheckpointer
+                motion_optimizer = MotionVarianceOptimizer(
+                    iterations=motion_optimizer_args.get("iterations", 3),
+                    lr=motion_optimizer_args.get("lr", 0.001),
+                    start_after_steps=motion_optimizer_args.get("start_after_steps", 15),
+                    apply_frequency=motion_optimizer_args.get("apply_frequency", 5),
+                    use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
+                    temperature=motion_optimizer_args.get("temperature", 10.0)
+                )
+                state_checkpointer = ModelStateCheckpointer(device=device)
+                
+                # Save model state
+                checkpoint_key = f"step_{idx}"
+                state_checkpointer.save_state(transformer, key=checkpoint_key)
+                
+                # Run optimization
+                optimized_sample = motion_optimizer.optimize_noise_prediction(
+                    model=transformer,
+                    sample=latent_model_input[0],  # Remove batch dim
+                    timestep=timestep,
+                    arg_c={
+                        'context': text_embeds["prompt_embeds"],
+                        'seq_len': seq_len,
+                        'freqs': freqs
+                    },
+                    arg_null={
+                        'context': text_embeds["negative_prompt_embeds"],
+                        'seq_len': seq_len,
+                        'freqs': freqs
+                    },
+                    guide_scale=cfg[idx],
+                    curr_step=idx,
+                    total_steps=steps
+                )
+                
+                # Restore model state
+                state_checkpointer.load_state(transformer, key=checkpoint_key)
+                state_checkpointer.clear(key=checkpoint_key)
+                
+                # Use optimized sample for scheduler step
+                latent_model_input = optimized_sample.unsqueeze(0)  # Add back batch dim
+            
             if flowedit_args is None:
                 
                 latent = latent.to(intermediate_device)
@@ -3558,7 +3556,7 @@ class WanVideoSampler:
                     pbar.update(1)
             
             # Force garbage collection after each step
-            if motion_optimizer_args is not None:
+            if motion_optimizer is not None:
                 torch.cuda.empty_cache()
                 gc.collect()
 
@@ -3583,10 +3581,10 @@ class WanVideoSampler:
         #     save_torch_file(saved_state_dict, "sparge_wan.safetensors")
 
         
-        # # Clean up state checkpointer
-        # if state_checkpointer is not None:
-        #     state_checkpointer.clear_all()
-        #     del state_checkpointer
+        # Clean up state checkpointer
+        if state_checkpointer is not None:
+            state_checkpointer.clear_all()
+            del state_checkpointer
 
         if force_offload:
             if model["manual_offloading"]:
