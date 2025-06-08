@@ -2495,22 +2495,6 @@ class WanVideoSampler:
 
         image_cond = image_embeds.get("image_embeds", None)
         ATI_tracks = None
-        
-        if motion_optimizer_args is not None:
-            motion_optimizer = MotionVarianceOptimizer(
-                iterations=motion_optimizer_args.get("iterations", 3),
-                lr=motion_optimizer_args.get("iterations", 0.0001),
-                start_after_steps=int(steps * 0.01) if motion_optimizer_args.get("start_after_steps", -1) == -1 else motion_optimizer_args.get("start_after_steps", -1),  # Start after 20% of steps
-                apply_frequency=motion_optimizer_args.get("apply_frequency", 1),
-                use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
-                temperature=motion_optimizer_args.get("temperature", 10.0)
-            )
-            from motion_optimizer import ModelStateCheckpointer
-            state_checkpointer = ModelStateCheckpointer(device=self.device)
-        else:
-            motion_optimizer = None
-            state_checkpointer = None
-        
         add_cond = attn_cond = attn_cond_neg = None
        
         if image_cond is not None:
@@ -3491,13 +3475,52 @@ class WanVideoSampler:
                     noise_pred = torch.cat([noise_pred[:, latent_video_length - shift_idx:]] + [noise_pred[:, :latent_video_length - shift_idx]], dim=1)
                     shift_idx = (shift_idx + latent_skip) % latent_video_length
             
-            if motion_optimizer is not None and t.item() in timestemps:
-                # FlowMo: Some code here?
-                ...
+            timestemps = [973, 968, 963, 957, 952, 946]  # Steps to apply motion optimization
+            if motion_optimizer_args is not None and t.item() in timestemps:
+                # Initialize motion optimizer
+                from .flowmo.motion_optimizer import MotionVarianceOptimizer, ModelStateCheckpointer
+                motion_optimizer = MotionVarianceOptimizer(
+                    iterations=motion_optimizer_args.get("iterations", 3),
+                    lr=motion_optimizer_args.get("lr", 0.001),
+                    start_after_steps=motion_optimizer_args.get("start_after_steps", 15),
+                    apply_frequency=motion_optimizer_args.get("apply_frequency", 5),
+                    use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
+                    temperature=motion_optimizer_args.get("temperature", 10.0)
+                )
+                state_checkpointer = ModelStateCheckpointer(device=device)
+                
+                # Save model state
+                checkpoint_key = f"step_{idx}"
+                state_checkpointer.save_state(transformer, key=checkpoint_key)
+                
+                # Run optimization
+                optimized_sample = motion_optimizer.optimize_noise_prediction(
+                    model=transformer,
+                    sample=latent_model_input[0],  # Remove batch dim
+                    timestep=timestep,
+                    arg_c={
+                        'context': text_embeds["prompt_embeds"],
+                        'seq_len': seq_len,
+                        'freqs': freqs
+                    },
+                    arg_null={
+                        'context': text_embeds["negative_prompt_embeds"],
+                        'seq_len': seq_len,
+                        'freqs': freqs
+                    },
+                    guide_scale=cfg[idx],
+                    curr_step=idx,
+                    total_steps=steps
+                )
+                
+                # Restore model state
+                state_checkpointer.load_state(transformer, key=checkpoint_key)
+                state_checkpointer.clear(key=checkpoint_key)
+                
+                # Use optimized sample for scheduler step
+                latent_model_input = optimized_sample.unsqueeze(0)  # Add back batch dim
             
             if flowedit_args is None:
-                
-                # FlowMo: HERE?
                 
                 latent = latent.to(intermediate_device)
                 step_args = {
