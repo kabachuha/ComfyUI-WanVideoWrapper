@@ -193,13 +193,6 @@ class MotionVarianceOptimizer:
         Returns:
             Optimized sample tensor
         """
-        
-        if not isinstance(timestep, torch.Tensor):
-            timestep = torch.tensor([timestep], device=sample.device)
-        
-        def custom_forward(x, t, **kwargs):
-            return model([x], t=t, **kwargs)[0]  # Add batch dimension handling
-        
         # Only apply after certain steps and at specified frequency
         if curr_step < self.start_after_steps or curr_step % self.apply_frequency != 0:
             return sample
@@ -242,7 +235,7 @@ class MotionVarianceOptimizer:
                 latent_model_input = [sample_opt]
                 
                 # Forward pass for conditional prediction 
-                outputs_cond = custom_forward(latent_model_input, t=timestep, **arg_c)
+                outputs_cond = model(latent_model_input, t=timestep, **arg_c)
                 
                 # Ensure we have proper tensor outputs
                 if isinstance(outputs_cond, (list, tuple)):
@@ -255,7 +248,7 @@ class MotionVarianceOptimizer:
                 torch.cuda.empty_cache()
                 gc.collect()
                 
-                outputs_uncond = custom_forward(latent_model_input, t=timestep, **arg_null)
+                outputs_uncond = model(latent_model_input, t=timestep, **arg_null)
                 
                 if isinstance(outputs_uncond, (list, tuple)):
                     noise_pred_uncond = outputs_uncond[0]
