@@ -2505,8 +2505,11 @@ class WanVideoSampler:
                 use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
                 temperature=motion_optimizer_args.get("temperature", 10.0)
             )
+            from motion_optimizer import ModelStateCheckpointer
+            state_checkpointer = ModelStateCheckpointer(device=self.device)
         else:
             motion_optimizer = None
+            state_checkpointer = None
         
         add_cond = attn_cond = attn_cond_neg = None
        
@@ -3487,9 +3490,15 @@ class WanVideoSampler:
                 if latent_shift_start_percent <= current_step_percentage <= latent_shift_end_percent:
                     noise_pred = torch.cat([noise_pred[:, latent_video_length - shift_idx:]] + [noise_pred[:, :latent_video_length - shift_idx]], dim=1)
                     shift_idx = (shift_idx + latent_skip) % latent_video_length
-                
+            
+            if motion_optimizer is not None and t.item() in timestemps:
+                # FlowMo: Some code here?
+                ...
             
             if flowedit_args is None:
+                
+                # FlowMo: HERE?
+                
                 latent = latent.to(intermediate_device)
                 step_args = {
                     "generator": seed_g,
@@ -3522,6 +3531,11 @@ class WanVideoSampler:
                     callback(idx, callback_latent, None, steps)
                 else:
                     pbar.update(1)
+            
+            # Force garbage collection after each step
+            if motion_optimizer is not None:
+                torch.cuda.empty_cache()
+                gc.collect()
 
         if phantom_latents is not None:
             x0 = x0[:,:-phantom_latents.shape[1]]
@@ -3542,6 +3556,12 @@ class WanVideoSampler:
         #     saved_state_dict = extract_sparse_attention_state_dict(transformer)
         #     torch.save(saved_state_dict, "sparge_wan.pt")
         #     save_torch_file(saved_state_dict, "sparge_wan.safetensors")
+
+        
+        # Clean up state checkpointer
+        if state_checkpointer is not None:
+            state_checkpointer.clear_all()
+            del state_checkpointer
 
         if force_offload:
             if model["manual_offloading"]:
@@ -3788,7 +3808,8 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoVACEModelSelect": WanVideoVACEModelSelect,
     "WanVideoPhantomEmbeds": WanVideoPhantomEmbeds,
     "CreateCFGScheduleFloatList": CreateCFGScheduleFloatList,
-    "WanVideoRealisDanceLatents": WanVideoRealisDanceLatents
+    "WanVideoRealisDanceLatents": WanVideoRealisDanceLatents,
+    "WanVideoMotionOptimizer": WanVideoMotionOptimizer,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSampler": "WanVideo Sampler",
@@ -3827,4 +3848,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoPhantomEmbeds": "WanVideo Phantom Embeds",
     "CreateCFGScheduleFloatList": "WanVideo CFG Schedule Float List",
     "WanVideoRealisDanceLatents": "WanVideo RealisDance Latents",
+    "WanVideoMotionOptimizer": "WanVideo Motion Optimizer",
     }
