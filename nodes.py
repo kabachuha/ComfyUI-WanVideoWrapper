@@ -20,6 +20,8 @@ from .wanvideo.utils.scheduling_flow_match_lcm import FlowMatchLCMScheduler
 from .enhance_a_video.globals import enable_enhance, disable_enhance, set_enhance_weight, set_num_frames
 from .taehv import TAEHV
 
+from .flowmo.motion_optimizer import MotionVarianceOptimizer
+
 from accelerate import init_empty_weights
 from accelerate.utils import set_module_tensor_to_device
 from einops import rearrange
@@ -2301,6 +2303,29 @@ class WanVideoLoopArgs:
     def process(self, **kwargs):
         return (kwargs,)
 
+class WanVideoMotionOptimizer:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                "iterations" : ("INT", {"default": 3, "min": 1,}),
+                "lr" : ("FLOAT", {"default": 0.001, "min": 1e-6,}),
+                "start_after_steps" : ("INT", {"default": -1, "min": 0,}),
+                "apply_frequency" : ("INT", {"default": 1, "min": 1,}),
+                "use_softmax_mean": ("BOOLEAN", {"default": True}),
+                "temperature": ("FLOAT", {"default": 10.0, "min": 0,}),
+            },
+        }
+
+    RETURN_TYPES = ("MOTION_OPTIMIZER", )
+    RETURN_NAMES = ("motion_optimizer_args",)
+    FUNCTION = "process"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "FlowMo Motion Optimizer"
+    EXPERIMENTAL = True
+
+    def process(self, **kwargs):
+        return (kwargs,)
+
 class WanVideoExperimentalArgs:
     @classmethod
     def INPUT_TYPES(s):
@@ -2364,6 +2389,7 @@ class WanVideoSampler:
                 "unianimate_poses": ("UNIANIMATE_POSE", ),
                 "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS", ),
                 "uni3c_embeds": ("UNI3C_EMBEDS", ),
+                "motion_optimizer_args": ("MOTION_OPTIMIZER", ),
             }
         }
 
@@ -2375,7 +2401,7 @@ class WanVideoSampler:
     def process(self, model, text_embeds, image_embeds, shift, steps, cfg, seed, scheduler, riflex_freq_index, 
         force_offload=True, samples=None, feta_args=None, denoise_strength=1.0, context_options=None, 
         teacache_args=None, flowedit_args=None, batched_cfg=False, slg_args=None, rope_function="default", loop_args=None, 
-        experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None):
+        experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None, motion_optimizer_args=None):
         #assert not (context_options and teacache_args), "Context options cannot currently be used together with teacache."
         patcher = model
         model = model.model
@@ -2469,6 +2495,19 @@ class WanVideoSampler:
 
         image_cond = image_embeds.get("image_embeds", None)
         ATI_tracks = None
+        
+        if motion_optimizer_args is not None:
+            motion_optimizer = MotionVarianceOptimizer(
+                iterations=motion_optimizer_args.get("iterations", 3),
+                lr=motion_optimizer_args.get("iterations", 0.0001),
+                start_after_steps=int(steps * 0.01) if motion_optimizer_args.get("start_after_steps", -1) == -1 else motion_optimizer_args.get("start_after_steps", -1),  # Start after 20% of steps
+                apply_frequency=motion_optimizer_args.get("apply_frequency", 1),
+                use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
+                temperature=motion_optimizer_args.get("temperature", 10.0)
+            )
+        else:
+            motion_optimizer = None
+        
         add_cond = attn_cond = attn_cond_neg = None
        
         if image_cond is not None:
