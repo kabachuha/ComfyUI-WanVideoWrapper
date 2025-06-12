@@ -20,7 +20,7 @@ from .wanvideo.utils.scheduling_flow_match_lcm import FlowMatchLCMScheduler
 from .enhance_a_video.globals import enable_enhance, disable_enhance, set_enhance_weight, set_num_frames
 from .taehv import TAEHV
 
-from .flowmo.motion_optimizer import MotionVarianceOptimizer
+from .flowmo.motion_optimizer import MotionVarianceOptimizer, ModelStateCheckpointer
 
 from accelerate import init_empty_weights
 from accelerate.utils import set_module_tensor_to_device
@@ -34,6 +34,8 @@ import comfy.latent_formats
 from comfy.clip_vision import clip_preprocess, ClipVisionModel
 from comfy.sd import load_lora_for_models
 from comfy.cli_args import args, LatentPreviewMethod
+
+import traceback
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -2309,7 +2311,7 @@ class WanVideoMotionOptimizer:
         return {"required": {
                 "iterations" : ("INT", {"default": 3, "min": 1,}),
                 "lr" : ("FLOAT", {"default": 0.001, "min": 1e-6,}),
-                "start_after_steps" : ("INT", {"default": -1, "min": 0,}),
+                "start_after_steps" : ("INT", {"default": -1, "min": -1,}),
                 "apply_frequency" : ("INT", {"default": 1, "min": 1,}),
                 "use_softmax_mean": ("BOOLEAN", {"default": True}),
                 "temperature": ("FLOAT", {"default": 10.0, "min": 0,}),
@@ -2496,20 +2498,27 @@ class WanVideoSampler:
         image_cond = image_embeds.get("image_embeds", None)
         ATI_tracks = None
         
+        # Initialize motion optimizer if args are provided
         if motion_optimizer_args is not None:
             motion_optimizer = MotionVarianceOptimizer(
                 iterations=motion_optimizer_args.get("iterations", 3),
-                lr=motion_optimizer_args.get("iterations", 0.0001),
-                start_after_steps=int(steps * 0.01) if motion_optimizer_args.get("start_after_steps", -1) == -1 else motion_optimizer_args.get("start_after_steps", -1),  # Start after 20% of steps
-                apply_frequency=motion_optimizer_args.get("apply_frequency", 1),
+                lr=motion_optimizer_args.get("lr", 0.001),
+                start_after_steps=int(steps * 0.01) if motion_optimizer_args.get("start_after_steps", -1) == -1 else motion_optimizer_args.get("start_after_steps", -1),
+                apply_frequency=motion_optimizer_args.get("apply_frequency", 5),
                 use_softmax_mean=motion_optimizer_args.get("use_softmax_mean", True),
                 temperature=motion_optimizer_args.get("temperature", 10.0)
             )
-            from motion_optimizer import ModelStateCheckpointer
-            state_checkpointer = ModelStateCheckpointer(device=self.device)
+            state_checkpointer = ModelStateCheckpointer(device=device)
         else:
             motion_optimizer = None
             state_checkpointer = None
+        
+        if motion_optimizer is not None and context_options is not None:
+            log.warning("FlowMo is not compatible with context windowing and will be disabled")
+            motion_optimizer = None
+    
+        # Timesteps where FlowMo will be applied (same as original)
+        timestemps = [999, 995, 991, 987, 982, 978, 973, 968, 963, 957, 952, 946]
         
         add_cond = attn_cond = attn_cond_neg = None
        
@@ -3485,20 +3494,88 @@ class WanVideoSampler:
                     timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
                     teacache_state=self.teacache_state)
 
+            # ====== FlowMo Integration Start ======
+            if (motion_optimizer is not None 
+                and state_checkpointer is not None 
+                and t.item() in timestemps):
+                
+                try:
+                    # Save model state before optimization
+                    checkpoint_key = f"step_{idx}"
+                    state_checkpointer.save_state(transformer, key=checkpoint_key)
+                    
+                    # Prepare arguments - remove duplicate 't' parameter
+                    arg_c = {
+                        'context': text_embeds["prompt_embeds"],
+                        'seq_len': seq_len,
+                        'y': image_cond_input if image_cond is not None else None,
+                        'clip_fea': clip_fea if clip_fea is not None else None,
+                        'device': device,
+                        'freqs': freqs,
+                        'current_step': idx,
+                        'control_lora_enabled': control_lora_enabled if control_latents is not None else False,
+                        'camera_embed': camera_embed if recammaster is not None else None,
+                        'unianim_data': unianim_data if unianimate_poses is not None else None,
+                        'fun_ref': fun_ref_input if fun_ref_image is not None else None,
+                        'fun_camera': control_camera_input if control_camera_latents is not None else None,
+                        'audio_proj': audio_proj if fantasytalking_embeds is not None else None,
+                        'audio_context_lens': audio_context_lens if fantasytalking_embeds is not None else None,
+                        'audio_scale': audio_scale if fantasytalking_embeds is not None else None,
+                        "pcd_data": pcd_data if uni3c_embeds is not None else None,
+                        "controlnet": controlnet if controlnet_latents is not None else None,
+                        "add_cond": add_cond_input if add_cond is not None else None,
+                    }
+                    arg_null = {
+                        'context': text_embeds["negative_prompt_embeds"],
+                        'seq_len': seq_len,
+                        'y': image_cond_input if image_cond is not None else None,
+                        'clip_fea': clip_fea_neg if clip_fea_neg is not None else clip_fea,
+                        'device': device,
+                        'freqs': freqs,
+                        'current_step': idx,
+                        'control_lora_enabled': False,
+                        'camera_embed': camera_embed if recammaster is not None else None,
+                        'unianim_data': None,
+                        'fun_ref': None,
+                        'fun_camera': None,
+                        'audio_proj': None,
+                        'audio_context_lens': None,
+                        'audio_scale': None,
+                        "pcd_data": None,
+                        "controlnet": None,
+                        "add_cond": None,
+                    }
+                    
+                    # Run motion optimization - pass timestep separately
+                    optimized_sample = motion_optimizer.optimize_noise_prediction(
+                        model=transformer,
+                        sample=latent_model_input,
+                        timestep=timestep,  # Passed separately, not in arg_c/arg_null
+                        arg_c=arg_c,
+                        arg_null=arg_null,
+                        guide_scale=cfg[idx],
+                        curr_step=idx,
+                        total_steps=len(timesteps)
+                    )
+                    
+                    # Use optimized sample for scheduler step
+                    latent_model_input = optimized_sample.detach()
+                except Exception as e:
+                    log.error(f"FlowMo optimization failed: {str(e)}")
+                    traceback.print_exc()
+                finally:
+                    # Restore original model state
+                    state_checkpointer.load_state(transformer, key=checkpoint_key)
+                    state_checkpointer.clear(key=checkpoint_key)
+            # ====== FlowMo Integration End ======
+
             if latent_shift_loop:
                 #reverse latent shift
                 if latent_shift_start_percent <= current_step_percentage <= latent_shift_end_percent:
                     noise_pred = torch.cat([noise_pred[:, latent_video_length - shift_idx:]] + [noise_pred[:, :latent_video_length - shift_idx]], dim=1)
                     shift_idx = (shift_idx + latent_skip) % latent_video_length
             
-            if motion_optimizer is not None and t.item() in timestemps:
-                # FlowMo: Some code here?
-                ...
-            
             if flowedit_args is None:
-                
-                # FlowMo: HERE?
-                
                 latent = latent.to(intermediate_device)
                 step_args = {
                     "generator": seed_g,

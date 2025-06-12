@@ -27,6 +27,7 @@ class ManualGradientCheckpointer:
         def checkpointed_forward(self_model, latent_model_input, t, **kwargs):
             """Wrapped forward function with gradient checkpointing"""
             # Get the first element of latent_model_input
+            #latent = latent_model_input[0].clone().requires_grad_(True)  # Add clone() and requires_grad
             latent = latent_model_input[0]
             
             def custom_forward(x, timestep):
@@ -49,7 +50,8 @@ class ManualGradientCheckpointer:
                 custom_forward, 
                 latent,
                 t,
-                preserve_rng_state=True  # Important for consistent results
+                preserve_rng_state=True,  # Important for consistent results
+                use_reentrant=False  # Add this flag
             )
             
         # Replace the forward method
