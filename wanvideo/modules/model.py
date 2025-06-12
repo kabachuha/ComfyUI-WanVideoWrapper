@@ -6,6 +6,8 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from einops import repeat, rearrange
+
+from ...kernels import fast_rms_layernorm_w_b_e, fast_layernorm_w_b_e
 from ...enhance_a_video.enhance import get_feta_scores
 from ...enhance_a_video.globals import is_enhance_enabled
 
@@ -142,11 +144,13 @@ class WanRMSNorm(nn.Module):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return self._norm(x)* self.weight
+        if fast_rms_layernorm_w_b_e is not None:
+            return fast_rms_layernorm_w_b_e(x, self.weight, None, eps=self.eps)
+        else:
+            return self._norm(x)* self.weight
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps).to(x.dtype)
-
 
 class WanLayerNorm(nn.LayerNorm):
 
@@ -158,7 +162,7 @@ class WanLayerNorm(nn.LayerNorm):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x)
+        return super().forward(x) if fast_layernorm_w_b_e is None else fast_layernorm_w_b_e(x, self.weight, self.bias, eps=self.eps)
 
 
 class WanSelfAttention(nn.Module):
