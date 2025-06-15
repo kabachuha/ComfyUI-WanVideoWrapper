@@ -2659,6 +2659,7 @@ class WanVideoSampler:
                 control_end_percent = control_embeds.get("end_percent", 1.0)
             drop_last = image_embeds.get("drop_last", False)
             has_ref = image_embeds.get("has_ref", False)
+            stage_changed = False
         else: #t2v
             target_shape = image_embeds.get("target_shape", None)
             if target_shape is None:
@@ -2698,11 +2699,14 @@ class WanVideoSampler:
                             "seq_len": vace_additional_embeds[i]["vace_seq_len"]
                         })
 
+            stage_changed = False
+            jenga_enable_turbo = jenga_args is not None and jenga_args.get("enable_turbo", False)
+            res_rate = 0.75 if jenga_enable_turbo else 1.0
             noise = torch.randn(
                     target_shape[0],
                     target_shape[1] + 1 if has_ref else target_shape[1],
-                    target_shape[2],
-                    target_shape[3],
+                    int(target_shape[2] * res_rate) // 2 * 2,
+                    int(target_shape[3] * res_rate) // 2 * 2,
                     dtype=torch.float32,
                     device=torch.device("cpu"),
                     generator=seed_g)
@@ -3335,6 +3339,7 @@ class WanVideoSampler:
 
         #region main loop start
         for idx, t in enumerate(tqdm(timesteps)):    
+            
             if flowedit_args is not None:
                 if idx < skip_steps:
                     continue
@@ -3599,19 +3604,54 @@ class WanVideoSampler:
                 
             
             if flowedit_args is None:
+                
                 latent = latent.to(intermediate_device)
                 step_args = {
                     "generator": seed_g,
                 }
                 if isinstance(sample_scheduler, DEISMultistepScheduler) or isinstance(sample_scheduler, FlowMatchScheduler):
                     step_args.pop("generator", None)
-                temp_x0 = sample_scheduler.step(
-                    noise_pred[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else noise_pred.unsqueeze(0),
-                    t,
-                    latent[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else latent.unsqueeze(0),
-                    #return_dict=False,
-                    **step_args)[0]
-                latent = temp_x0.squeeze(0)
+                
+                # Stage transition logic (after idx >= 25)
+                if jenga_enable_turbo and idx > jenga_args.get("turbo_end", 0) and not stage_changed:
+                    stage_changed = True
+                    clean_noise = sample_scheduler.step_to_zero(
+                        noise_pred.unsqueeze(0),
+                        t,
+                        latent.unsqueeze(0),
+                        return_dict=False,
+                        generator=seed_g)[0]
+
+                    target_shape_stage = noise[0].shape[-3:]
+                    clean_noise = torch.nn.functional.interpolate(clean_noise, size=target_shape_stage, mode='trilinear')
+                    noisy_sample = sample_scheduler.add_noise(
+                        clean_noise,
+                        noise[0].unsqueeze(0),
+                        timesteps[idx+1].unsqueeze(0)
+                    )
+                    sample_scheduler._step_index += 1
+                    latent = noisy_sample.squeeze(0)
+                    
+                    sample_scheduler.disable_corrector = [i for i in range(jenga_args.get("turbo_end", 1), steps)]
+                    sample_scheduler.set_timesteps(
+                        steps, device=latent.device, shift=shift+2)
+                    timesteps = sample_scheduler.timesteps
+                    transformer.__class__.linear_to_hilbert = transformer.__class__.curve_sels[1][0][0]
+                    transformer.__class__.hilbert_order = transformer.__class__.curve_sels[1][0][1]
+                    transformer.__class__.block_neighbor_list = transformer.__class__.curve_sels[1][0][2]
+                    transformer.__class__.p_remain_rates = transformer.__class__.p_remain_rates
+                    transformer.stage_start = True
+                else:
+                    # sample_scheduler.disable_corrector = False
+                    transformer.stage_start = False
+                    # stage_changed = False
+                    temp_x0 = sample_scheduler.step(
+                        noise_pred[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else noise_pred.unsqueeze(0),
+                        t,
+                        latent[:, :orig_noise_len].unsqueeze(0) if recammaster is not None else latent.unsqueeze(0),
+                        #return_dict=False,
+                        **step_args)[0]
+                    latent = temp_x0.squeeze(0)
 
                 x0 = latent.to(device)
                 if callback is not None:
@@ -3631,6 +3671,8 @@ class WanVideoSampler:
                     callback(idx, callback_latent, None, steps)
                 else:
                     pbar.update(1)
+            
+            
 
         if phantom_latents is not None:
             x0 = x0[:,:-phantom_latents.shape[1]]
