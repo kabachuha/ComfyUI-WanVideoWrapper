@@ -1,13 +1,7 @@
 import torch
 from gilbert import gilbert_mapping, sliced_gilbert_block_neighbor_mapping, sliced_gilbert_mapping, gilbert_block_neighbor_mapping
 
-def setup_hilbert(cached_hilbert, latent_height, latent_width, latent_time, enable_turbo):
-    
-    key = f"{latent_height};{latent_width};{latent_time}"
-    if key in cached_hilbert:
-        return cached_hilbert[key]
-    
-    cached_hilbert.clear()
+def setup_hilbert(transformer, latent_height, latent_width, latent_time, enable_turbo, p_remain_rates):
     
     # JULIAN: space curve related.
     res_rate_list = [0.75, 1.0] if enable_turbo else [1.0, 1.0]
@@ -29,4 +23,10 @@ def setup_hilbert(cached_hilbert, latent_height, latent_width, latent_time, enab
         curve_sel.append([torch.tensor(LINEAR_TO_HILBERT, dtype=torch.long), torch.tensor(HILBERT_ORDER, dtype=torch.long), block_neighbor_list])
         curve_sels.append(curve_sel)
     
-    cached_hilbert[key] = curve_sels
+    transformer.curve_sels = curve_sels
+    transformer.curve_sel = curve_sels[0]
+    transformer.linear_to_hilbert = curve_sels[0][0][0]
+    transformer.hilbert_order = curve_sels[0][0][1]
+    transformer.block_neighbor_list = curve_sels[0][0][2]
+    transformer.p_remain_rates = p_remain_rates
+    transformer.use_cache = False
