@@ -20,6 +20,8 @@ from .wanvideo.utils.scheduling_flow_match_lcm import FlowMatchLCMScheduler
 from .enhance_a_video.globals import enable_enhance, disable_enhance, set_enhance_weight, set_num_frames
 from .taehv import TAEHV
 
+from .jenga import setup_hilbert
+
 from accelerate import init_empty_weights
 from accelerate.utils import set_module_tensor_to_device
 from einops import rearrange
@@ -2733,6 +2735,9 @@ class WanVideoSampler:
                     device=torch.device("cpu"),
                     generator=seed_g)
             
+            if jenga_args is not None:
+                setup_hilbert(transformer, target_shape[2], target_shape[3], target_shape[1], jenga_enable_turbo, jenga_args.get("p_remain_rates", 0))
+            
             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
             recammaster = image_embeds.get("recammaster", None)
@@ -3671,10 +3676,10 @@ class WanVideoSampler:
                     sample_scheduler.set_timesteps(
                         steps, device=latent.device, shift=shift+2)
                     timesteps = sample_scheduler.timesteps
-                    transformer.__class__.linear_to_hilbert = transformer.__class__.curve_sels[1][0][0]
-                    transformer.__class__.hilbert_order = transformer.__class__.curve_sels[1][0][1]
-                    transformer.__class__.block_neighbor_list = transformer.__class__.curve_sels[1][0][2]
-                    transformer.__class__.p_remain_rates = transformer.__class__.p_remain_rates
+                    transformer.linear_to_hilbert = transformer.curve_sels[1][0][0]
+                    transformer.hilbert_order = transformer.curve_sels[1][0][1]
+                    transformer.block_neighbor_list = transformer.curve_sels[1][0][2]
+                    transformer.p_remain_rates = transformer.p_remain_rates
                     transformer.stage_start = True
                 else:
                     # sample_scheduler.disable_corrector = False
