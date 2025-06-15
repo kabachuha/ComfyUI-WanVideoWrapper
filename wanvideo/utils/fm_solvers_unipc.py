@@ -882,3 +882,73 @@ class FlowUniPCMultistepScheduler(SchedulerMixin, ConfigMixin):
 
     def __len__(self):
         return self.config.num_train_timesteps
+
+    def step_to_zero(
+        self,
+        model_output: torch.Tensor,
+        timestep: Union[int, torch.Tensor],
+        sample: torch.Tensor,
+        generator=None,
+        return_dict: bool = True,
+    ) -> Union[SchedulerOutput, Tuple]:
+        """
+        Predict the denoised sample at the end (zero noise level) directly from the current step.
+        
+        Args:
+            model_output (`torch.Tensor`):
+                The direct output from learned diffusion model at current timestep.
+            timestep (`int` or `torch.Tensor`):
+                The current discrete timestep in the diffusion chain.
+            sample (`torch.Tensor`):
+                A current instance of a sample created by the diffusion process.
+            generator (`torch.Generator`, *optional*):
+                A random number generator.
+            return_dict (`bool`):
+                Whether or not to return a `SchedulerOutput` or tuple.
+                
+        Returns:
+            `SchedulerOutput` or `tuple`:
+                If return_dict is `True`, `SchedulerOutput` is returned, otherwise a tuple is returned
+                where the first element is the denoised sample.
+        """
+        if isinstance(timestep, torch.Tensor):
+            timestep = timestep.to(self.timesteps.device)
+        
+        # Find the index for the current timestep
+        if self.step_index is None:
+            self._init_step_index(timestep)
+            
+        # Get current sigma value
+        sigma_t = self.sigmas[self.step_index]
+        
+        # Convert model output based on prediction type
+        if self.config.prediction_type == "flow_prediction":
+            if self.predict_x0:
+                # For UniPC with predict_x0=True
+                # Directly calculate x0 prediction
+                x0_pred = sample - sigma_t * model_output
+                
+                if self.config.thresholding:
+                    x0_pred = self._threshold_sample(x0_pred)
+                    
+                # Since we want to go directly to zero noise, the final sample is just x0_pred
+                denoised_sample = x0_pred.to(sample.dtype)
+            else:
+                # For UniPC with predict_x0=False
+                # model_output is treated as epsilon (noise)
+                alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(sigma_t)
+                x0_pred = (sample - sigma_t * model_output) / alpha_t
+                
+                if self.config.thresholding:
+                    x0_pred = self._threshold_sample(x0_pred)
+                    
+                denoised_sample = x0_pred.to(sample.dtype)
+        else:
+            raise ValueError(
+                f"prediction_type given as {self.config.prediction_type} must be 'flow_prediction' for the FlowUniPCMultistepScheduler."
+            )
+            
+        if not return_dict:
+            return (denoised_sample,)
+            
+        return SchedulerOutput(prev_sample=denoised_sample)
