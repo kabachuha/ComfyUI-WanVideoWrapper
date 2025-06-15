@@ -2432,6 +2432,27 @@ class WanVideoLoopArgs:
     def process(self, **kwargs):
         return (kwargs,)
 
+class WanVideoJengaArgs:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {"required": {
+                "enable_turbo": ("BOOLEAN", {"default": False}),
+                "turbo_end": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "sa_drop_rates": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "p_remain_rates": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
+            },
+        }
+
+    RETURN_TYPES = ("JENGAARGS", )
+    RETURN_NAMES = ("jenga_args",)
+    FUNCTION = "process"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "https://github.com/dvlab-research/Jenga"
+    EXPERIMENTAL = True
+
+    def process(self, **kwargs):
+        return (kwargs,)
+
 class WanVideoExperimentalArgs:
     @classmethod
     def INPUT_TYPES(s):
@@ -2495,6 +2516,7 @@ class WanVideoSampler:
                 "unianimate_poses": ("UNIANIMATE_POSE", ),
                 "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS", ),
                 "uni3c_embeds": ("UNI3C_EMBEDS", ),
+                "jenga_args": ("JENGAARGS", ),
             }
         }
 
@@ -2506,7 +2528,7 @@ class WanVideoSampler:
     def process(self, model, text_embeds, image_embeds, shift, steps, cfg, seed, scheduler, riflex_freq_index, 
         force_offload=True, samples=None, feta_args=None, denoise_strength=1.0, context_options=None, 
         cache_args=None, teacache_args=None, flowedit_args=None, batched_cfg=False, slg_args=None, rope_function="default", loop_args=None, 
-        experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None):
+        experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None, jenga_args=None):
         
         patcher = model
         model = model.model
@@ -3081,7 +3103,7 @@ class WanVideoSampler:
 
         #region model pred
         def predict_with_cfg(z, cfg_scale, positive_embeds, negative_embeds, timestep, idx, image_cond=None, clip_fea=None, 
-                             control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None, add_cond=None, cache_state=None):
+                             control_latents=None, vace_data=None, unianim_data=None, audio_proj=None, control_camera_latents=None, add_cond=None, cache_state=None, cur_sa_drop_rate=None):
             z = z.to(dtype)
             with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype, enabled=("fp8" in model["quantization"])):
 
@@ -3192,6 +3214,7 @@ class WanVideoSampler:
                     "add_cond": add_cond_input,
                     "nag_params": text_embeds.get("nag_params", {}),
                     "nag_context": text_embeds.get("nag_prompt_embeds", None),
+                    "sa_drop_rate": cur_sa_drop_rate,
                 }
 
                 batch_size = 1
@@ -3338,7 +3361,19 @@ class WanVideoSampler:
             pass
 
         #region main loop start
-        for idx, t in enumerate(tqdm(timesteps)):    
+        for idx, t in enumerate(tqdm(timesteps)):
+            
+            if jenga_args is not None and idx <= int(steps*jenga_args.get("turbo_end", 0.6)):
+                cur_sa_drop_rate = args.sa_drop_rates[0]
+            else:
+                if len(args.sa_drop_rates) == 1:
+                    cur_sa_drop_rate = args.sa_drop_rates[0]
+                else:
+                    cur_sa_drop_rate = args.sa_drop_rates[1]
+
+            # drop_rate warmup.
+            step_normed = idx / (len(timesteps) - 1) * 4
+            cur_sa_drop_rate = min(cur_sa_drop_rate, (step_normed) * cur_sa_drop_rate)
             
             if flowedit_args is not None:
                 if idx < skip_steps:
@@ -3416,7 +3451,7 @@ class WanVideoSampler:
                                 partial_zt_src, cfg[idx], 
                                 positive, source_embeds["negative_prompt_embeds"],
                                 timestep, idx, partial_img_emb, control_latents,
-                                source_clip_fea, current_teacache)
+                                source_clip_fea, current_teacache, cur_sa_drop_rate=cur_sa_drop_rate)
                             
                             if cache_args is not None:
                                 self.window_tracker.cache_states[window_id] = new_teacache
@@ -3432,7 +3467,7 @@ class WanVideoSampler:
                             source_embeds["negative_prompt_embeds"],
                             timestep, idx, source_image_cond, 
                             source_clip_fea, control_latents,
-                            cache_state=self.cache_state_source)
+                            cache_state=self.cache_state_source, cur_sa_drop_rate=cur_sa_drop_rate)
                 else:
                     if idx == len(timesteps) - drift_steps:
                         x_tgt = zt_tgt
@@ -3613,7 +3648,7 @@ class WanVideoSampler:
                     step_args.pop("generator", None)
                 
                 # Stage transition logic (after idx >= 25)
-                if jenga_enable_turbo and idx > jenga_args.get("turbo_end", 0) and not stage_changed:
+                if jenga_enable_turbo and idx > int(steps*jenga_args.get("turbo_end", 0.6)) and not stage_changed:
                     stage_changed = True
                     clean_noise = sample_scheduler.step_to_zero(
                         noise_pred.unsqueeze(0),
@@ -3632,7 +3667,7 @@ class WanVideoSampler:
                     sample_scheduler._step_index += 1
                     latent = noisy_sample.squeeze(0)
                     
-                    sample_scheduler.disable_corrector = [i for i in range(jenga_args.get("turbo_end", 1), steps)]
+                    sample_scheduler.disable_corrector = [i for i in range(int(steps*jenga_args.get("turbo_end", 0.6)), steps)]
                     sample_scheduler.set_timesteps(
                         steps, device=latent.device, shift=shift+2)
                     timesteps = sample_scheduler.timesteps
