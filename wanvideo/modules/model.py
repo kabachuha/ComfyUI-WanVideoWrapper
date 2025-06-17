@@ -1062,7 +1062,6 @@ class WanModel(ModelMixin, ConfigMixin):
         self.hilbert_order = None
         self.block_neighbor_list = None
         self.p_remain_rates = None
-        self.use_cache = False
 
     @staticmethod
     def _prepare_blockwise_causal_attn_mask(

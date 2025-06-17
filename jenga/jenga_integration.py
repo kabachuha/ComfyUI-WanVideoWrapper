@@ -29,4 +29,3 @@ def setup_hilbert(transformer, latent_height, latent_width, latent_time, enable_
     transformer.hilbert_order = curve_sels[0][0][1]
     transformer.block_neighbor_list = curve_sels[0][0][2]
     transformer.p_remain_rates = p_remain_rates
-    transformer.use_cache = False
