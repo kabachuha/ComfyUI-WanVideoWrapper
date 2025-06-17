@@ -2440,7 +2440,8 @@ class WanVideoJengaArgs:
         return {"required": {
                 "enable_turbo": ("BOOLEAN", {"default": False}),
                 "turbo_end": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "sa_drop_rates": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "start_sa_drop_rate": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "finish_sa_drop_rate": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
                 "p_remain_rates": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
             },
         }
@@ -3368,17 +3369,17 @@ class WanVideoSampler:
         #region main loop start
         for idx, t in enumerate(tqdm(timesteps)):
             
-            if jenga_args is not None and idx <= int(steps*jenga_args.get("turbo_end", 0.6)):
-                cur_sa_drop_rate = args.sa_drop_rates[0]
-            else:
-                if len(args.sa_drop_rates) == 1:
-                    cur_sa_drop_rate = args.sa_drop_rates[0]
+            if jenga_args is not None:
+                if idx <= int(steps*jenga_args.get("turbo_end", 0.6)):
+                    cur_sa_drop_rate = int(steps*jenga_args.get("start_sa_drop_rate", 0))
                 else:
-                    cur_sa_drop_rate = args.sa_drop_rates[1]
+                    cur_sa_drop_rate = int(steps*jenga_args.get("finish_sa_drop_rate", 0))
 
-            # drop_rate warmup.
-            step_normed = idx / (len(timesteps) - 1) * 4
-            cur_sa_drop_rate = min(cur_sa_drop_rate, (step_normed) * cur_sa_drop_rate)
+                # drop_rate warmup.
+                step_normed = idx / (len(timesteps) - 1) * 4
+                cur_sa_drop_rate = min(cur_sa_drop_rate, (step_normed) * cur_sa_drop_rate)
+            else:
+                cur_sa_drop_rate = None
             
             if flowedit_args is not None:
                 if idx < skip_steps:

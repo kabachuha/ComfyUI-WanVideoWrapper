@@ -1055,6 +1055,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         self.block_mask=None
         
+        # jenga
         self.curve_sels = None
         self.curve_sel = None
         self.linear_to_hilbert = None
@@ -1218,7 +1219,8 @@ class WanModel(ModelMixin, ConfigMixin):
         add_cond=None,
         attn_cond=None,
         nag_params={},
-        nag_context=None
+        nag_context=None,
+        jenga_sa_drop_rate=None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -1319,6 +1321,10 @@ class WanModel(ModelMixin, ConfigMixin):
             torch.cat([u, u.new_zeros(1, seq_len - u.size(1), u.size(2))],
                       dim=1) for u in x
         ])
+        
+        # jenga
+        if jenga_sa_drop_rate is not None:
+            x = x[:, self.hilbert_order]
 
         if freqs is None: #comfy rope
             rope_func = "comfy"
@@ -1532,7 +1538,12 @@ class WanModel(ModelMixin, ConfigMixin):
                 block_mask=self.block_mask,
                 nag_params=nag_params,
                 nag_context=nag_context,
-                is_uncond = is_uncond
+                is_uncond = is_uncond,
+                # jenga
+                sa_drop_rate=jenga_sa_drop_rate,
+                freq_remap=self.hilbert_order,
+                block_neighbor_list=self.block_neighbor_list,
+                p_remain_rates=self.p_remain_rates,
                 )
             
             if vace_data is not None:
@@ -1609,6 +1620,10 @@ class WanModel(ModelMixin, ConfigMixin):
         if attn_cond is not None:
             x = x[:, :x_len]
             grid_sizes = torch.stack([torch.tensor([u[0] - 1, u[1], u[2]]) for u in grid_sizes]).to(grid_sizes.device)
+
+        # jenga
+        if jenga_sa_drop_rate is not None:
+            x = x[:, self.linear_to_hilbert]
 
         x = self.head(x, e.to(x.device))
         x = self.unpatchify(x, grid_sizes) # type: ignore[arg-type]
