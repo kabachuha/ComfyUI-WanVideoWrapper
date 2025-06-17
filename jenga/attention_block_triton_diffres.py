@@ -8,9 +8,9 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-import time
+#import time
 
-from wanvideo.modules.attention import attention
+from ..wanvideo.modules.attention import attention
 
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
@@ -318,7 +318,7 @@ def _build_block_index_with_importance_optimized(
     block_neighbor_list: torch.Tensor = None,  # [block_num, block_num] one-hot tensor
     first_frame_blocks: int = 0,  # New parameter: first few blocks perform full self-attention
 ):
-    cur_time = time.time()
+    #cur_time = time.time()
     batch_size, num_heads, context_size, head_dim = query.shape
     num_query_blocks = (context_size + block_size_M - 1) // block_size_M
     device = query.device
