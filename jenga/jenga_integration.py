@@ -1,5 +1,5 @@
 import torch
-from gilbert import gilbert_mapping, sliced_gilbert_block_neighbor_mapping, sliced_gilbert_mapping, gilbert_block_neighbor_mapping
+from .gilbert import gilbert_mapping, sliced_gilbert_block_neighbor_mapping, sliced_gilbert_mapping, gilbert_block_neighbor_mapping
 
 def setup_hilbert(transformer, latent_height, latent_width, latent_time, enable_turbo, p_remain_rates):
     
