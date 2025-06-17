@@ -2797,7 +2797,8 @@ class WanVideoSampler:
                     generator=seed_g)
             
             if jenga_args is not None:
-                setup_hilbert(transformer, target_shape[2], target_shape[3], target_shape[1], jenga_enable_turbo, jenga_args.get("p_remain_rates", 0))
+                patch_size = (1, 2, 2)
+                setup_hilbert(transformer, noise.shape[2] // patch_size[1], noise.shape[3] // patch_size[2], noise.shape[1] // patch_size[0], jenga_enable_turbo, jenga_args.get("p_remain_rates", 0))
             
             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
