@@ -10,6 +10,12 @@ from ...enhance_a_video.enhance import get_feta_scores
 from ...enhance_a_video.globals import is_enhance_enabled
 
 try:
+    from ...jenga.attention_block_triton_diffres import block_sparse_attention
+    block_sparse_attention = torch.compile(block_sparse_attention)
+except Exception as e:
+    block_sparse_attention = None
+
+try:
     from torch.nn.attention.flex_attention import create_block_mask, flex_attention, BlockMask
     create_block_mask = torch.compile(create_block_mask)
     flex_attention = torch.compile(flex_attention)
@@ -99,7 +105,7 @@ def rope_params(max_seq_len, dim, theta=10000, L_test=25, k=0):
 from comfy.model_management import get_torch_device, get_autocast_device
 @torch.autocast(device_type=get_autocast_device(get_torch_device()), enabled=False)
 @torch.compiler.disable()
-def rope_apply(x, grid_sizes, freqs):
+def rope_apply(x, grid_sizes, freqs, freq_remap=None):
     n, c = x.size(2), x.size(3) // 2
 
     # split freqs
@@ -121,6 +127,9 @@ def rope_apply(x, grid_sizes, freqs):
                             dim=-1).reshape(seq_len, 1, -1)
 
         # apply rotary embedding
+        if freq_remap is not None:
+            # print("remapping freqs here.", freq_remap.shape, x_i.shape)
+            freqs_i = freqs_i[freq_remap]
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
         x_i = torch.cat([x_i, x[i, seq_len:]])
 
@@ -188,7 +197,7 @@ class WanSelfAttention(nn.Module):
         self.norm_q = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
-    def forward(self, x, seq_lens, grid_sizes, freqs, rope_func = "default", block_mask=None):
+    def forward(self, x, seq_lens, grid_sizes, freqs, rope_func = "default", block_mask=None, sa_drop_rate=None, per_block_tokens=128, p_remain_rates=0.8, freq_remap=None, block_neighbor_list=None):
         r"""
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads]
@@ -211,7 +220,25 @@ class WanSelfAttention(nn.Module):
         if is_enhance_enabled():
             feta_scores = get_feta_scores(q, k)
 
-        if self.attention_mode == 'flex_attention':
+        if sa_drop_rate is not None: # Jenga indicator
+            # count ceiling.
+            num_blocks = math.ceil(x.shape[1] / per_block_tokens)
+            selected_top_k = math.ceil(int(num_blocks * (1-sa_drop_rate)))
+            first_frame_blocks = math.ceil(num_blocks // 21)
+            
+            x = block_sparse_attention(
+                query=rope_apply(q, grid_sizes, freqs, freq_remap=freq_remap),
+                key=rope_apply(k, grid_sizes, freqs, freq_remap=freq_remap),
+                value=v,
+                cu_seqlens_q=seq_lens,
+                top_k=selected_top_k,
+                text_blocks=0,
+                block_neighbor_list=block_neighbor_list,
+                p_remain_rates=p_remain_rates,
+                first_frame_blocks=first_frame_blocks
+            )
+
+        elif self.attention_mode == 'flex_attention':
             if rope_func == "comfy":
                 roped_query, roped_key = apply_rope_comfy(q, k, freqs)
             else:
@@ -584,7 +611,11 @@ class WanAttentionBlock(nn.Module):
         block_mask=None,
         nag_params={},
         nag_context=None,
-        is_uncond=False
+        is_uncond=False,
+        sa_drop_rate=None,
+        freq_remap=None,
+        block_neighbor_list=None,
+        p_remain_rates=0.0,
     ):
         r"""
         Args:
@@ -623,6 +654,7 @@ class WanAttentionBlock(nn.Module):
             seq_lens, grid_sizes,
             freqs, rope_func=rope_func,
             block_mask=block_mask,
+            sa_drop_rate=sa_drop_rate, freq_remap=freq_remap, block_neighbor_list=block_neighbor_list, p_remain_rates=p_remain_rates, # jenga
             )
         #ReCamMaster
         if camera_embed is not None:
