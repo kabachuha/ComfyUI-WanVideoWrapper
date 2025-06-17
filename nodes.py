@@ -3292,7 +3292,7 @@ class WanVideoSampler:
                     "add_cond": add_cond_input,
                     "nag_params": text_embeds.get("nag_params", {}),
                     "nag_context": text_embeds.get("nag_prompt_embeds", None),
-                    "sa_drop_rate": cur_sa_drop_rate,
+                    "jenga_sa_drop_rate": cur_sa_drop_rate,
                 }
 
                 batch_size = 1
