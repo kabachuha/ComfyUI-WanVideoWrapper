@@ -10,9 +10,10 @@ import triton
 import triton.language as tl
 import time
 
+from wanvideo.modules.attention import attention
+
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
-from flash_attn import flash_attn_func # TODO: sage attn option
 
 # from flash_attn import flash_attn_varlen_func
 # import pycuda.autoprimaryctx
@@ -500,7 +501,7 @@ def block_sparse_attention_combined(
         key_text = key  # Can see all keys
         value_text = value
         # Use Flash Attention
-        output_text = flash_attn_func(
+        output_text = attention(
             query_text.permute(0, 2, 1, 3), key_text.permute(0, 2, 1, 3), value_text.permute(0, 2, 1, 3),
             causal=False, softmax_scale=sm_scale
         ).transpose(1, 2)
