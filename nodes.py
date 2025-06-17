@@ -2475,9 +2475,9 @@ class WanVideoJengaArgs:
         return {"required": {
                 "enable_turbo": ("BOOLEAN", {"default": False}),
                 "turbo_end": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "start_sa_drop_rate": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "finish_sa_drop_rate": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "p_remain_rates": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "start_sa_drop_rate": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "finish_sa_drop_rate": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.1}),
+                "p_remain_rates": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.1}),
             },
         }
 
@@ -3273,6 +3273,8 @@ class WanVideoSampler:
                 if minimax_latents is not None:
                     z_pos = z_neg = torch.cat([z, minimax_latents, minimax_mask_latents], dim=0)
                  
+                print("cur_sa_drop_rate", cur_sa_drop_rate)
+                
                 base_params = {
                     'seq_len': seq_len,
                     'device': device,
@@ -3582,7 +3584,7 @@ class WanVideoSampler:
                             partial_zt_tgt, cfg[idx], 
                             positive, text_embeds["negative_prompt_embeds"],
                             timestep, idx, partial_img_emb, partial_control_latents,
-                            clip_fea, current_teacache)
+                            clip_fea, current_teacache, cur_sa_drop_rate=cur_sa_drop_rate)
                         
                         if cache_args is not None:
                             self.window_tracker.cache_states[window_id] = new_teacache
@@ -3597,7 +3599,7 @@ class WanVideoSampler:
                         text_embeds["prompt_embeds"], 
                         text_embeds["negative_prompt_embeds"], 
                         timestep, idx, image_cond, clip_fea, control_latents,
-                        cache_state=self.cache_state)
+                        cache_state=self.cache_state, cur_sa_drop_rate=cur_sa_drop_rate)
                 v_delta = vt_tgt - vt_src
                 x_tgt = x_tgt.to(torch.float32)
                 v_delta = v_delta.to(torch.float32)
@@ -3686,7 +3688,7 @@ class WanVideoSampler:
                         text_embeds["negative_prompt_embeds"], 
                         timestep, idx, partial_img_emb, clip_fea, partial_control_latents, partial_vace_context, partial_unianim_data,partial_audio_proj,
                         partial_control_camera_latents, partial_add_cond,
-                        current_teacache)
+                        current_teacache, cur_sa_drop_rate=cur_sa_drop_rate)
 
                     if cache_args is not None:
                         self.window_tracker.cache_states[window_id] = new_teacache
@@ -3703,7 +3705,7 @@ class WanVideoSampler:
                     text_embeds["prompt_embeds"], 
                     text_embeds["negative_prompt_embeds"], 
                     timestep, idx, image_cond, clip_fea, control_latents, vace_data, unianim_data, audio_proj, control_camera_latents, add_cond,
-                    cache_state=self.cache_state)
+                    cache_state=self.cache_state, cur_sa_drop_rate=cur_sa_drop_rate)
 
             if latent_shift_loop:
                 #reverse latent shift

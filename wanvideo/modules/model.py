@@ -198,7 +198,7 @@ class WanSelfAttention(nn.Module):
         self.norm_k = WanRMSNorm(dim, eps=eps) if qk_norm else nn.Identity()
 
     def forward(self, x, seq_lens, grid_sizes, freqs, rope_func = "default", block_mask=None, sa_drop_rate=None, per_block_tokens=128, p_remain_rates=0.8, freq_remap=None, block_neighbor_list=None):
-        r"""
+        r""" 
         Args:
             x(Tensor): Shape [B, L, num_heads, C / num_heads]
             seq_lens(Tensor): Shape [B]
@@ -225,6 +225,8 @@ class WanSelfAttention(nn.Module):
             num_blocks = math.ceil(x.shape[1] / per_block_tokens)
             selected_top_k = math.ceil(int(num_blocks * (1-sa_drop_rate)))
             first_frame_blocks = math.ceil(num_blocks // 21)
+            
+            print("Jenga triggered!")
             
             x = block_sparse_attention(
                 query=rope_apply(q, grid_sizes, freqs, freq_remap=freq_remap),
