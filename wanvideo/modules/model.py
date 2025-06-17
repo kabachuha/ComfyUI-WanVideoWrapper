@@ -10,9 +10,12 @@ from ...enhance_a_video.enhance import get_feta_scores
 from ...enhance_a_video.globals import is_enhance_enabled
 
 try:
+    #print("Compiling jenga")
     from ...jenga.attention_block_triton_diffres import block_sparse_attention
-    block_sparse_attention = torch.compile(block_sparse_attention)
+    #block_sparse_attention = torch.compile(block_sparse_attention)
 except Exception as e:
+    print("Error importing BSA")
+    print(e)
     block_sparse_attention = None
 
 try:
@@ -106,6 +109,11 @@ from comfy.model_management import get_torch_device, get_autocast_device
 @torch.autocast(device_type=get_autocast_device(get_torch_device()), enabled=False)
 @torch.compiler.disable()
 def rope_apply(x, grid_sizes, freqs, freq_remap=None):
+    
+    print("Jenga rope!")
+    print("x.shape", x.shape)
+    print("freqs.shape", freqs.shape)
+    
     n, c = x.size(2), x.size(3) // 2
 
     # split freqs
@@ -205,6 +213,7 @@ class WanSelfAttention(nn.Module):
             grid_sizes(Tensor): Shape [B, 3], the second dimension contains (F, H, W)
             freqs(Tensor): Rope freqs, shape [1024, C / num_heads / 2]
         """
+        print("Attn enter!")
         b, s, n, d = *x.shape[:2], self.num_heads, self.head_dim
 
         # query, key, value function
@@ -228,6 +237,7 @@ class WanSelfAttention(nn.Module):
             
             print("Jenga triggered!")
             
+            assert block_sparse_attention is not None
             x = block_sparse_attention(
                 query=rope_apply(q, grid_sizes, freqs, freq_remap=freq_remap),
                 key=rope_apply(k, grid_sizes, freqs, freq_remap=freq_remap),
@@ -621,6 +631,7 @@ class WanAttentionBlock(nn.Module):
         block_neighbor_list=None,
         p_remain_rates=0.0,
     ):
+        print("Attn block enter!")
         r"""
         Args:
             x(Tensor): Shape [B, L, C]
@@ -1370,7 +1381,13 @@ class WanModel(ModelMixin, ConfigMixin):
         
         # jenga
         if jenga_sa_drop_rate is not None:
+            print("Jenga reordring start")
+            print(x.shape)
+            print(self.hilbert_order)
             x = x[:, self.hilbert_order]
+            print("Jenga reordered")
+            print(x[0])
+            print(x[0].shape)
 
         if freqs is None: #comfy rope
             rope_func = "comfy"
@@ -1672,6 +1689,7 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # jenga
         if jenga_sa_drop_rate is not None:
+            print("Jenga reordring")
             x = x[:, self.linear_to_hilbert]
 
         x = self.head(x, e.to(x.device))
