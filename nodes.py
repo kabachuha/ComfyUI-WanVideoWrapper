@@ -3273,8 +3273,6 @@ class WanVideoSampler:
 
                 if minimax_latents is not None:
                     z_pos = z_neg = torch.cat([z, minimax_latents, minimax_mask_latents], dim=0)
-                 
-                print("cur_sa_drop_rate", cur_sa_drop_rate)
                 
                 base_params = {
                     'seq_len': seq_len,
