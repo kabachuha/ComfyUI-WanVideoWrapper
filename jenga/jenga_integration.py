@@ -4,7 +4,8 @@ from .gilbert import gilbert_mapping, sliced_gilbert_block_neighbor_mapping, sli
 def setup_hilbert(transformer, latent_height, latent_width, latent_time, enable_turbo, p_remain_rates):
     
     # JULIAN: space curve related.
-    res_rate_list = [0.75, 1.0] if enable_turbo else [1.0, 1.0]
+    #res_rate_list = [0.75, 1.0] if enable_turbo else [1.0, 1.0]
+    res_rate_list = [1.0, 1.0] # note: handled before in this wrapper
     
     curve_sels = []
     for res_rate in res_rate_list:
