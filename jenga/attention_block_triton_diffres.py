@@ -523,6 +523,7 @@ def block_sparse_attention_combined(
     return output.permute(0, 2, 1, 3).type(out_dtype)
 
 # Keep the original function as an alias for backward compatibility
+@torch.compiler.disable()
 def block_sparse_attention(
     query: torch.Tensor,
     key: torch.Tensor,     
