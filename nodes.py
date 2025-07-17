@@ -18,6 +18,7 @@ from .wanvideo.schedulers import (
 )
 
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler, DEISMultistepScheduler
+from .wanvideo.utils.fm_solvers_euler_d import FlowMatchEulerDynamicScheduler
 
 from .multitalk.multitalk import timestep_transform, add_noise
 
@@ -1805,7 +1806,7 @@ class WanVideoSampler:
                 "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Moves the model to the offload device after sampling"}),
-                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "flowmatch_pusa", "multitalk"],
+                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/d", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "flowmatch_pusa", "multitalk"],
                     {
                         "default": 'unipc'
                     }),
@@ -1884,6 +1885,14 @@ class WanVideoSampler:
                     sample_scheduler.sigmas = sigmas.to(device)
                     sample_scheduler.timesteps = (sample_scheduler.sigmas[:-1] * 1000).to(torch.int64).to(device)
                     sample_scheduler.num_inference_steps = len(sample_scheduler.timesteps)
+
+            
+            elif "euler/d" in scheduler:
+                sample_scheduler = FlowMatchEulerDynamicScheduler(shift=shift)
+                if flowedit_args: #seems to work better
+                    timesteps, _ = retrieve_timesteps(sample_scheduler, device=device, sigmas=get_sampling_sigmas(steps, shift))
+                else:
+                    sample_scheduler.set_timesteps(steps, device=device, sigmas=sigmas.tolist() if sigmas is not None else None)
 
             elif scheduler in ['euler/beta', 'euler']:
                 sample_scheduler = FlowMatchEulerDiscreteScheduler(shift=shift, use_beta_sigmas=(scheduler == 'euler/beta'))
