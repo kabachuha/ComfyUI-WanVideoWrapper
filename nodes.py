@@ -1252,7 +1252,7 @@ class WanVideoSampler:
                 "flowedit_args": ("FLOWEDITARGS", ),
                 "batched_cfg": ("BOOLEAN", {"default": False, "tooltip": "Batch cond and uncond for faster sampling, possibly faster on some hardware, uses more memory"}),
                 "slg_args": ("SLGARGS", ),
-                "rope_function": (["default", "comfy", "comfy_chunked"], {"default": "comfy", "tooltip": "Comfy's RoPE implementation doesn't use complex numbers and can thus be compiled, that should be a lot faster when using torch.compile. Chunked version has reduced peak VRAM usage when not using torch.compile"}),
+                "rope_function": (["default", "comfy", "comfy_chunked", "flash"], {"default": "comfy", "tooltip": "Comfy's RoPE implementation doesn't use complex numbers and can thus be compiled, that should be a lot faster when using torch.compile. Chunked version has reduced peak VRAM usage when not using torch.compile"}),
                 "loop_args": ("LOOPARGS", ),
                 "experimental_args": ("EXPERIMENTALARGS", ),
                 "sigmas": ("SIGMAS", ),
@@ -1737,7 +1737,7 @@ class WanVideoSampler:
         freqs = None
         transformer.rope_embedder.k = None
         transformer.rope_embedder.num_frames = None
-        if "comfy" in rope_function:
+        if "comfy" in rope_function or "flash" in rope_function:
             transformer.rope_embedder.k = riflex_freq_index
             transformer.rope_embedder.num_frames = latent_video_length
         else:

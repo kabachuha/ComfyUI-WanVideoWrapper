@@ -20,6 +20,25 @@ try:
 except:
     pass
 
+try:
+    from flash_attn.layers.rotary import apply_rotary_emb as flash_apply_rotary_emb
+    
+    def apply_rope_flash(q, k, freqs_cis):
+        
+        cos = freqs_cis[..., 0]
+        sin = freqs_cis[..., 1]
+        
+        q = flash_apply_rotary_emb(
+            q, cos, sin, seqlen_offsets=0, interleaved=False, inplace=True
+        )
+        k = flash_apply_rotary_emb(
+            k, cos, sin, seqlen_offsets=0, interleaved=False, inplace=True
+        )
+
+        return q, k
+except:
+    pass
+
 from .attention import attention
 import numpy as np
 __all__ = ['WanModel']
@@ -705,6 +724,8 @@ class WanAttentionBlock(nn.Module):
         #RoPE
         if self.rope_func == "comfy":
             q, k = apply_rope_comfy(q, k, freqs)
+        elif self.rope_func == "flash":
+            q, k = apply_rope_flash(q, k, freqs)
         elif self.rope_func == "comfy_chunked":
             q, k = apply_rope_comfy_chunked(q, k, freqs)
         else:
