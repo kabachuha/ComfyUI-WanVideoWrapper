@@ -572,11 +572,11 @@ class AttentionKVCompress(nn.Module):
     def __init__(
         self,
         dim,
-        sampling='ave', # TODO: Let some hero train a true quality conv compressor
+        sampling='nearest', # TODO: Let some hero train a true quality conv compressor
         sr_ratio=1,
     ):
         super().__init__()
-        self.sampling=sampling    # ['conv', 'ave', 'uniform', 'uniform_every']
+        self.sampling=sampling    # ['conv', 'nearest', 'uniform', 'uniform_every']
         self.sr_ratio = sr_ratio
         if sr_ratio > 1 and sampling == 'conv':
             # Avg Conv Init.
@@ -586,19 +586,21 @@ class AttentionKVCompress(nn.Module):
             self.sr.bias.data.zero_()
             self.norm = nn.LayerNorm(dim)
 
+    @torch.compiler.disable
     def downsample_3d(self, tensor, T, H, W, scale_factor, sampling=None):
         if sampling is None or scale_factor == 1:
             return tensor
         B, N, C = tensor.shape
+        dtype = tensor.dtype
 
         if sampling == 'uniform_every':
             return tensor[:, ::scale_factor], int(N // scale_factor)
 
         tensor = tensor.reshape(B, T, H, W, C).permute(0, 4, 1, 2, 3)
-        new_T, new_H, new_W = T, int(H / scale_factor), int(W / scale_factor)
+        new_T, new_H, new_W = T, int(H / scale_factor), int(W / scale_factor) # this line breaks compiler because of tensor splitting
         new_N = new_T * new_H * new_W
 
-        if sampling == 'ave':
+        if sampling == 'nearest':
             tensor = torch.nn.functional.interpolate(
                 tensor, scale_factor=(1, 1 / scale_factor, 1 / scale_factor), mode='nearest'
             ).permute(0, 2, 3, 4, 1)
@@ -610,7 +612,7 @@ class AttentionKVCompress(nn.Module):
         else:
             raise ValueError
 
-        return tensor.reshape(B, new_N, C).contiguous(), new_N
+        return tensor.reshape(B, new_N, C).contiguous().to(dtype=dtype), new_N
 
     def forward(self, k, v, T, H, W):
         # KV compression
@@ -779,9 +781,9 @@ class WanAttentionBlock(nn.Module):
         if self.kv_compress.sr_ratio > 1:
             k = k.view(k.shape[0], seq_lens[0], self.dim)
             v = v.view(k.shape[0], seq_lens[0], self.dim)
-            
+
             k, v, new_N = self.kv_compress(k, v, grid_sizes[0][0], grid_sizes[0][1], grid_sizes[0][2])
-            seq_lens = torch.Tensor([new_N]*k.shape[0]) # [B]
+            seq_lens = seq_lens // seq_lens[0] * new_N.cpu() # hacky line for resizing
             
             k = k.view(k.shape[0], seq_lens[0], self.num_heads, self.dim // self.num_heads)
             v = v.view(k.shape[0], seq_lens[0], self.num_heads, self.dim // self.num_heads)
