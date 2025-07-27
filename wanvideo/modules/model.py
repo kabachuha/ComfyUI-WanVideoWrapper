@@ -877,6 +877,8 @@ class WanAttentionBlock(nn.Module):
             feta_scores = get_feta_scores(q, k)
 
         #RoPE
+        freqs = freqs[:, ::x.shape[1]//input_x.shape[1], ...]
+        freqs = freqs[:, :input_x.shape[1], ...]
         if self.rope_func == "comfy":
             q, k = apply_rope_comfy(q, k, freqs)
         elif self.rope_func == "comfy_chunked":
