@@ -919,11 +919,11 @@ class WanAttentionBlock(nn.Module):
         else:
             y = self.self_attn.forward(q, k, v, seq_lens)
 
-        y = r_a(y)
-
         # FETA
         if enhance_enabled:
             y.mul_(feta_scores)
+
+        y = r_a(y)
 
         #ReCamMaster
         if camera_embed is not None:
