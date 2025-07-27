@@ -568,6 +568,59 @@ WAN_CROSSATTENTION_CLASSES = {
     'i2v_cross_attn': WanI2VCrossAttention,
 }
 
+class AttentionKVCompress(nn.Module):
+    def __init__(
+        self,
+        dim,
+        sampling='ave', # TODO: Let some hero train a true quality conv compressor
+        sr_ratio=1,
+    ):
+        self.sampling=sampling    # ['conv', 'ave', 'uniform', 'uniform_every']
+        self.sr_ratio = sr_ratio
+        if sr_ratio > 1 and sampling == 'conv':
+            # Avg Conv Init.
+            # -- let's not compress time
+            self.sr = nn.Conv3d(dim, dim, groups=dim, kernel_size=(1, sr_ratio, sr_ratio), stride=(1, sr_ratio, sr_ratio))
+            self.sr.weight.data.fill_(1/sr_ratio**2)
+            self.sr.bias.data.zero_()
+            self.norm = nn.LayerNorm(dim)
+
+    def downsample_3d(self, tensor, T, H, W, scale_factor, sampling=None):
+        if sampling is None or scale_factor == 1:
+            return tensor
+        B, N, C = tensor.shape
+
+        if sampling == 'uniform_every':
+            return tensor[:, ::scale_factor], int(N // scale_factor)
+
+        tensor = tensor.reshape(B, T, H, W, C).permute(0, 4, 1, 2, 3)
+        new_H, new_W, new_T = T, int(H / scale_factor), int(W / scale_factor)
+        new_N = new_T * new_H * new_W
+
+        if sampling == 'ave':
+            tensor = torch.nn.functional.interpolate(
+                tensor, scale_factor=(1, 1 / scale_factor, 1 / scale_factor), mode='nearest'
+            ).permute(0, 2, 3, 4, 1)
+        elif sampling == 'uniform':
+            tensor = tensor[:, :, 1, ::scale_factor, ::scale_factor].permute(0, 2, 3, 4, 1)
+        elif sampling == 'conv':
+            tensor = self.sr(tensor).reshape(B, C, -1).permute(0, 2, 1)
+            tensor = self.norm(tensor)
+        else:
+            raise ValueError
+
+        return tensor.reshape(B, new_N, C).contiguous(), new_N
+
+    def forward(self, k, v, T, H, W):
+        # KV compression
+        if self.sr_ratio > 1:
+            k, new_N = self.downsample_3d(k, T, H, W, self.sr_ratio, sampling=self.sampling)
+            v, new_N = self.downsample_3d(v, T, H, W, self.sr_ratio, sampling=self.sampling)
+        else:
+            new_N = T * H * W
+
+        return k, v, new_N
+
 
 class WanAttentionBlock(nn.Module):
 
@@ -583,6 +636,8 @@ class WanAttentionBlock(nn.Module):
                  eps=1e-6,
                  attention_mode='sdpa',
                  rope_func="comfy",
+                 sr_sampling="ave", # for now
+                 sr_ratio=1,
                  ):
         super().__init__()
         self.dim = out_features
@@ -619,6 +674,8 @@ class WanAttentionBlock(nn.Module):
 
         # modulation
         self.modulation = nn.Parameter(torch.randn(1, 6, out_features) / in_features**0.5)
+        
+        self.kv_compress = AttentionKVCompress(out_features, sampling=sr_sampling, sr_ratio=sr_ratio)
 
     @torch.compiler.disable()
     def get_mod(self, e):
@@ -717,6 +774,10 @@ class WanAttentionBlock(nn.Module):
             q=rope_apply(q, grid_sizes, freqs)
             k=rope_apply(k, grid_sizes, freqs)
 
+        # Attention compress :)
+        k, v, new_N = self.kv_compress(k, v, grid_sizes[0][0], grid_sizes[0][1], grid_sizes[0][2])
+        seq_lens = torch.Tensor([new_N]*k.shape[0]) # [B]
+        
         #self-attention
         split_attn = (context is not None 
                       and (context.shape[0] > 1 or (clip_embed is not None and clip_embed.shape[0] > 1)) 
@@ -724,6 +785,7 @@ class WanAttentionBlock(nn.Module):
                       and inner_t is not None
                       )
         if split_attn:
+            assert self.kv_compress.sr_ratio == 1
             y = self.self_attn.forward_split(
             q, k, v, 
             seq_lens, grid_sizes, freqs, 
@@ -732,6 +794,7 @@ class WanAttentionBlock(nn.Module):
             video_attention_split_steps=video_attention_split_steps
             )
         elif ref_target_masks is not None:
+            assert self.kv_compress.sr_ratio == 1
             y, x_ref_attn_map = self.self_attn.forward_multitalk(q, k, v, seq_lens, grid_sizes, ref_target_masks)
         elif self.attention_mode == "radial_sage_attention":
             if self.dense_block or self.dense_timesteps is not None and current_step < self.dense_timesteps:
@@ -870,7 +933,8 @@ class VaceWanAttentionBlock(WanAttentionBlock):
             eps=1e-6,
             block_id=0,
             attention_mode='sdpa',
-            rope_func="comfy"
+            rope_func="comfy",
+            # let's maybe not reduce VACE precision?
     ):
         super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func)
         self.block_id = block_id
@@ -895,9 +959,11 @@ class BaseWanAttentionBlock(WanAttentionBlock):
         eps=1e-6,
         block_id=None,
         attention_mode='sdpa',
-        rope_func="comfy"
+        rope_func="comfy",
+        sr_sampling="ave",
+        sr_ratio=1,
     ):
-        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func)
+        super().__init__(cross_attn_type, in_features, out_features, ffn_dim, ffn2_dim, num_heads, qk_norm, cross_attn_norm, eps, attention_mode, rope_func, sr_sampling=sr_sampling, sr_ratio=sr_ratio)
         self.block_id = block_id
 
     def forward(self, x, vace_hints=None, vace_context_scale=[1.0], **kwargs):
@@ -1007,6 +1073,8 @@ class WanModel(ModelMixin, ConfigMixin):
                  in_dim_ref_conv=16,
                  add_control_adapter=False,
                  in_dim_control_adapter=24,
+                 sr_sampling="ave",
+                 sr_ratio=1
                  ):
         r"""
         Initialize the diffusion model backbone.
@@ -1145,7 +1213,7 @@ class WanModel(ModelMixin, ConfigMixin):
             BaseWanAttentionBlock('t2v_cross_attn', self.in_features, self.out_features, ffn_dim, self.ffn2_dim, num_heads,
                               qk_norm, cross_attn_norm, eps,
                               attention_mode=self.attention_mode, rope_func=self.rope_func,
-                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None)
+                              block_id=self.vace_layers_mapping[i] if i in self.vace_layers else None, sr_sampling=sr_sampling, sr_ratio=sr_ratio)
             for i in range(num_layers)
             ])
         else:
@@ -1160,7 +1228,7 @@ class WanModel(ModelMixin, ConfigMixin):
             self.blocks = nn.ModuleList([
                 WanAttentionBlock(cross_attn_type, self.in_features, self.out_features, ffn_dim, ffn2_dim, num_heads,
                                 qk_norm, cross_attn_norm, eps,
-                                attention_mode=self.attention_mode, rope_func=self.rope_func)
+                                attention_mode=self.attention_mode, rope_func=self.rope_func, sr_sampling=sr_sampling, sr_ratio=sr_ratio)
                 for _ in range(num_layers)
             ])
 

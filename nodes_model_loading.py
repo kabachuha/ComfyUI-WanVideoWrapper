@@ -727,6 +727,8 @@ class WanVideoModelLoader:
                 "vace_model": ("VACEPATH", {"default": None, "tooltip": "VACE model to use when not using model that has it included"}),
                 "fantasytalking_model": ("FANTASYTALKINGMODEL", {"default": None, "tooltip": "FantasyTalking model https://github.com/Fantasy-AMAP"}),
                 "multitalk_model": ("MULTITALKMODEL", {"default": None, "tooltip": "Multitalk model"}),
+                "kv_downsample_type": (["nearest", "conv", "uniform", "uniform_every"], {"default": "nearest", "tooltip": "Self-attention KV downsampling type. Conv not trained yet! Choose nearest."}),
+                "kv_downsample_ratio": ("FLOAT", {"default": 1.0, "min": 1.0, "max": 8.0, "step": 0.2, "tooltip": "KV spatial downsampling ratio"}),
             }
         }
 
@@ -736,7 +738,7 @@ class WanVideoModelLoader:
     CATEGORY = "WanVideoWrapper"
 
     def loadmodel(self, model, base_precision, load_device,  quantization,
-                  compile_args=None, attention_mode="sdpa", block_swap_args=None, lora=None, vram_management_args=None, vace_model=None, fantasytalking_model=None, multitalk_model=None):
+                  compile_args=None, attention_mode="sdpa", block_swap_args=None, lora=None, vram_management_args=None, vace_model=None, fantasytalking_model=None, multitalk_model=None, kv_downsample_type="nearest", kv_downsample_ratio=1.0):
         assert not (vram_management_args is not None and block_swap_args is not None), "Can't use both block_swap_args and vram_management_args at the same time"
         
         lora_low_mem_load = merge_loras = False
@@ -936,6 +938,8 @@ class WanVideoModelLoader:
             "add_ref_conv": True if "ref_conv.weight" in sd else False,
             "in_dim_ref_conv": sd["ref_conv.weight"].shape[1] if "ref_conv.weight" in sd else None,
             "add_control_adapter": True if "control_adapter.conv.weight" in sd else False,
+            "sr_sampling": kv_downsample_type,
+            "sr_ratio": kv_downsample_ratio,
         }
 
         with init_empty_weights():
