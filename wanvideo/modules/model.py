@@ -573,7 +573,7 @@ def do_nothing_s(x, mode=None):
 
 def find_patch_max_indices(tensor, st, sx, sy, t, x, y):  # tensor: (B,N)
     b, N = tensor.size()
-    tensor = tensor.view(b, t, x, y)
+    tensor = tensor.view(b, t, y, x)
     t_patches = t // st
     h_patches = y // sy
     w_patches = x // sx
