@@ -575,6 +575,7 @@ class AttentionKVCompress(nn.Module):
         sampling='ave', # TODO: Let some hero train a true quality conv compressor
         sr_ratio=1,
     ):
+        super().__init__()
         self.sampling=sampling    # ['conv', 'ave', 'uniform', 'uniform_every']
         self.sr_ratio = sr_ratio
         if sr_ratio > 1 and sampling == 'conv':
