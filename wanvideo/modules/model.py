@@ -776,8 +776,15 @@ class WanAttentionBlock(nn.Module):
             k=rope_apply(k, grid_sizes, freqs)
 
         # Attention compress :)
-        k, v, new_N = self.kv_compress(k, v, grid_sizes[0][0], grid_sizes[0][1], grid_sizes[0][2])
-        seq_lens = torch.Tensor([new_N]*k.shape[0]) # [B]
+        if self.kv_compress.sr_ratio > 1:
+            k = k.view(k.shape[0], seq_lens[0], self.num_heads*self.head_dim)
+            v = v.view(k.shape[0], seq_lens[0], self.num_heads*self.head_dim)
+            
+            k, v, new_N = self.kv_compress(k, v, grid_sizes[0][0], grid_sizes[0][1], grid_sizes[0][2])
+            seq_lens = torch.Tensor([new_N]*k.shape[0]) # [B]
+            
+            k = k.view(k.shape[0], seq_lens[0], self.num_heads, self.head_dim)
+            v = v.view(k.shape[0], seq_lens[0], self.num_heads, self.head_dim)
         
         #self-attention
         split_attn = (context is not None 
