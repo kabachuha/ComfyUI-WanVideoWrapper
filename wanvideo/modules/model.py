@@ -595,7 +595,7 @@ class AttentionKVCompress(nn.Module):
             return tensor[:, ::scale_factor], int(N // scale_factor)
 
         tensor = tensor.reshape(B, T, H, W, C).permute(0, 4, 1, 2, 3)
-        new_H, new_W, new_T = T, int(H / scale_factor), int(W / scale_factor)
+        new_T, new_H, new_W = T, int(H / scale_factor), int(W / scale_factor)
         new_N = new_T * new_H * new_W
 
         if sampling == 'ave':
@@ -603,7 +603,7 @@ class AttentionKVCompress(nn.Module):
                 tensor, scale_factor=(1, 1 / scale_factor, 1 / scale_factor), mode='nearest'
             ).permute(0, 2, 3, 4, 1)
         elif sampling == 'uniform':
-            tensor = tensor[:, :, 1, ::scale_factor, ::scale_factor].permute(0, 2, 3, 4, 1)
+            tensor = tensor[:, :, :, ::scale_factor, ::scale_factor].permute(0, 2, 3, 4, 1)
         elif sampling == 'conv':
             tensor = self.sr(tensor).reshape(B, C, -1).permute(0, 2, 1)
             tensor = self.norm(tensor)
@@ -777,14 +777,14 @@ class WanAttentionBlock(nn.Module):
 
         # Attention compress :)
         if self.kv_compress.sr_ratio > 1:
-            k = k.view(k.shape[0], seq_lens[0], self.num_heads*self.head_dim)
-            v = v.view(k.shape[0], seq_lens[0], self.num_heads*self.head_dim)
+            k = k.view(k.shape[0], seq_lens[0], self.dim)
+            v = v.view(k.shape[0], seq_lens[0], self.dim)
             
             k, v, new_N = self.kv_compress(k, v, grid_sizes[0][0], grid_sizes[0][1], grid_sizes[0][2])
             seq_lens = torch.Tensor([new_N]*k.shape[0]) # [B]
             
-            k = k.view(k.shape[0], seq_lens[0], self.num_heads, self.head_dim)
-            v = v.view(k.shape[0], seq_lens[0], self.num_heads, self.head_dim)
+            k = k.view(k.shape[0], seq_lens[0], self.num_heads, self.dim // self.num_heads)
+            v = v.view(k.shape[0], seq_lens[0], self.num_heads, self.dim // self.num_heads)
         
         #self-attention
         split_attn = (context is not None 
